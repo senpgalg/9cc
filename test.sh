@@ -8,7 +8,7 @@ assert() {
     cc -o tmp tmp.s
     ./tmp
     actual="$?"
-    
+
     if [ "$actual" = "$expected" ]; then
         echo "$input => $actual"
     else
@@ -19,5 +19,6 @@ assert() {
 
 assert 0 0
 assert 42 42
+assert 21 "5+20-4"
 
 echo OK
