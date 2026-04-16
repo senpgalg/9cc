@@ -1,6 +1,6 @@
 #include "9cc.h"
 
-Node *
+static Node *
 new_node(NodeKind kind)
 {
     Node *node = calloc(1, sizeof(Node));
@@ -8,7 +8,7 @@ new_node(NodeKind kind)
     return node;
 }
 
-Node *
+static Node *
 new_binary(NodeKind kind, Node *lhs, Node *rhs)
 {
     Node *node = new_node(kind);
@@ -17,7 +17,7 @@ new_binary(NodeKind kind, Node *lhs, Node *rhs)
     return node;
 }
 
-Node *
+static Node *
 new_num(int val)
 {
     Node *node = new_node(ND_NUM);
@@ -25,23 +25,48 @@ new_num(int val)
     return node;
 }
 
-Node *expr();
-Node *equality();
-Node *relational();
-Node *add();
-Node *mul();
-Node *primary();
-Node *unary();
+static Node *stmt();
+static Node *expr();
+static Node *equality();
+static Node *relational();
+static Node *add();
+static Node *mul();
+static Node *unary();
+static Node *primary();
 
-// expr = equality
+// program = stmt*
 Node *
+program()
+{
+    Node head;
+    head.next = NULL;
+    Node *cur = &head;
+
+    while (!at_eof()) {
+        cur->next = stmt();
+        cur = cur->next;
+    }
+    return head.next;
+}
+
+// stmt = expr ";"
+static Node *
+stmt()
+{
+    Node *node = expr();
+    expect(";");
+    return node;
+}
+
+// expr = assign
+static Node *
 expr()
 {
     return equality();
 }
 
 // equality = relational ("==" relational | "!=" relational)*
-Node *
+static Node *
 equality()
 {
     Node *node = relational();
@@ -57,7 +82,7 @@ equality()
 }
 
 // relational = add  ("<" add | "<=" add | ">" add | ">=" add)*
-Node *
+static Node *
 relational()
 {
     Node *node = add();
@@ -77,7 +102,7 @@ relational()
 }
 
 // add = mul ("+" mul | "-" mul)*
-Node *
+static Node *
 add()
 {
     Node *node = mul();
@@ -93,7 +118,7 @@ add()
 }
 
 // mul = unary ("*" unary | "/" unary)*
-Node *
+static Node *
 mul()
 {
     Node *node = unary();
@@ -109,7 +134,7 @@ mul()
 }
 
 // unary = ("+" | "-")? primary
-Node *
+static Node *
 unary()
 {
     if (consume("+"))
@@ -119,8 +144,8 @@ unary()
     return primary();
 }
 
-// primary = "(" expr ")" | num
-Node *
+// primary = "(" expr ")" | ident | num
+static Node *
 primary()
 {
     if (consume("(")) {
