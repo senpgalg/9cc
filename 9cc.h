@@ -53,8 +53,8 @@ typedef enum {
     ND_LT,      // <
     ND_LE,      // <=
     ND_ASSIGN,  // =
-    ND_LVAR,    // ローカル変数
-    ND_NUM, // Integer
+    ND_RETURN,  // "return"
+    ND_NUM,     // Integer
 } NodeKind;
 
 // AST node Type
