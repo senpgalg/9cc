@@ -36,6 +36,15 @@ error(char *fmt, ...)
     exit(1);
 }
 
+char *
+strndup(char *p, int len)
+{
+    char *buf = malloc(len + 1);
+    strncpy(buf, p, len);
+    buf[len] = '\0';
+    return buf;
+}
+
 // 次のトークンが期待している記号の時には、トークンを1つ読み進めて
 // 真を返す。それ以外の場合には偽を返す。
 bool
@@ -155,8 +164,11 @@ Token
         }
 
         // Identifier
-        if ('a' <= *p && *p <= 'z') {
-            cur = new_token(TK_IDENT, cur, p++, 1);
+        if (is_alpha(*p)) {
+            char *q = p++;
+            while (is_alnum(*p))
+                p++;
+            cur = new_token(TK_IDENT, cur, q, p - q);
             continue;
         }
 
