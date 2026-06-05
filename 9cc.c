@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <ctype.h>
 #include <stdarg.h>
 #include <stdbool.h>
@@ -9,34 +10,27 @@
 // Tokenizer
 //
 
-// トークンの種類
 typedef enum {
-    TK_RESERVED,    // 記号
-    TK_NUM,         // 整数トークン
-    TK_EOF,         // 入力の終わりを表すトークン
+    TK_PUNCT,   // Punctuators
+    TK_NUM,     // Numeric literals
+    TK_EOF,     // End-of-file markers
 } TokenKind;
 
+//Token type
 typedef struct Token Token;
-
-// トークン型
 struct Token {
-    TokenKind kind; // トークンの型
-    Token *next;    // 次の入力トークン
-    int val;        // kindがTK_NUMの場合、その数値
-    char *str;      // トークン文字列
+    TokenKind kind; // Token kind
+    Token *next;    // Next token
+    int val;        // If kind is TK_NUM, its value
+    char *loc;      // Token location
+    int len;        // Token length
 };
 
-// 入力プログラム
-char *user_input;
+// Input string
+static char *current_input;
 
-// 現在着目しているトークン
-Token *token;
-
-// エラーを報告するための関数
-// printfとおんなじ引数をとる
-void
-error(char *fmt, ...)
-{
+// Reports an error and exit.
+static void error(char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
     vfprintf(stderr, fmt, ap);
@@ -44,103 +38,104 @@ error(char *fmt, ...)
     exit(1);
 }
 
-// エラー箇所を報告する
-void
-error_at(char *loc, char *fmt, ...)
-{
-    va_list ap;
-    va_start(ap, fmt);
-
-    int pos = loc - user_input;
-    fprintf(stderr, "%s\n", user_input);
-    fprintf(stderr, "%*s", pos, "");    //
+// Reports an error location and exit.
+static void verror_at(char *loc, char *fmt, va_list ap) {
+    int pos = loc - current_input;
+    fprintf(stderr, "%s\n", current_input);
+    fprintf(stderr, "%*s", pos, "");    // print pos spaces.
     fprintf(stderr, "^ ");
     vfprintf(stderr, fmt, ap);
     fprintf(stderr, "\n");
     exit(1);
 }
 
-// 次のトークンが期待している記号の時には、トークンを1つ読み進めて
-// 真を返す。それ以外の場合には偽を返す。
-bool
-consume(char op)
-{
-    if (token->kind != TK_RESERVED || token->str[0] != op)
-        return false;
-    token = token->next;
-    return true;
+static void error_at(char *loc, char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    verror_at(loc, fmt, ap);
 }
 
-// 次のトークンが期待している記号の時には、トークンを1つ読み進める。
-// それ以外の場合にはエラーを報告する。
-void
-expect(char op)
-{
-    if (token->kind != TK_RESERVED || token->str[0] != op)
-        error_at(token->str, "expected '%c'", op);
-    token = token->next;
+static void error_tok(Token *tok, char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    verror_at(tok->loc, fmt, ap);
 }
 
-// 次のトークンが数値の場合、トークンを1つ読み進めてその数値を返す。
-// それ以外の場合にはエラーを報告する。
-int
-expect_number()
-{
-    if (token->kind != TK_NUM)
-        error_at(token->str, "expected a number");
-    int val = token->val;
-    token = token->next;
-    return val;
+// Consumes the current token if it matches `s`.
+static bool equal(Token *tok, char *op) {
+    return memcmp(tok->loc, op, tok->len) == 0 && op[tok->len] == '\0';
 }
 
-bool
-at_eof()
-{
-    return token->kind == TK_EOF;
+// Ensure that the current token is `s`.
+static Token *skip(Token *tok, char *s) {
+    if (!equal(tok, s))
+        error_tok(tok, "expected '%s'", s);
+    return tok->next;
 }
 
-// 新しいトークンを作成してcurにつなげる
-Token *
-new_token(TokenKind kind, Token *cur, char *str)
-{
+// Ensure that the current token is TK_NUM.
+static int get_number(Token *tok) {
+    if (tok->kind != TK_NUM)
+        error_tok(tok, "expected a number");
+    return tok->val;
+}
+
+// Create a new token
+static Token *new_token(TokenKind kind, char *start, char *end) {
     Token *tok = calloc(1, sizeof(Token));
     tok->kind = kind;
-    tok->str = str;
-    cur->next = tok;
+    tok->loc = start;
+    tok->len = end - start;
     return tok;
 }
 
-// 入力文字列pをトークナイズしてそれを返す
-Token *
-tokenize()
-{
-    char *p = user_input;
-    Token head;
-    head.next = NULL;
+static bool startswith(char *p, char *q) {
+    return strncmp(p, q, strlen(q)) == 0;
+}
+
+// Read a punctuator token from p and returns its length.
+static int read_punct(char *p) {
+    if (startswith(p, "==") || startswith(p, "!=") ||
+        startswith(p, "<=") || startswith(p, ">="))
+        return 2;
+    
+    return ispunct(*p) ? 1 : 0;
+}
+
+// Tokenize `current_input` and returns new tokens.
+static Token *tokenize(void) {
+    char *p = current_input;
+    Token head = {};
     Token *cur = &head;
 
     while (*p) {
-        // 空白文字をスキップ
+        // Skip whitespace characters.
         if (isspace(*p)) {
             p++;
             continue;
         }
 
-        if (strchr("+-*/()", *p)) {
-            cur = new_token(TK_RESERVED, cur, p++);
+        // Numeric literal
+        if (isdigit(*p)) {
+            cur = cur->next = new_token(TK_NUM, p, p);
+            char *q = p;
+            cur->val = strtoul(p, &p, 10);
+            cur->len = p - q;
             continue;
         }
 
-        if (isdigit(*p)) {
-            cur = new_token(TK_NUM, cur, p);
-            cur->val = strtol(p, &p, 10);
+        // Punctuators
+        int punct_len = read_punct(p);
+        if (punct_len) {
+            cur = cur->next = new_token(TK_PUNCT, p, p + punct_len);
+            p += cur->len;
             continue;
         }
 
         error_at(p, "invalid token");
     }
 
-    new_token(TK_EOF, cur, p);
+    cur = cur->next = new_token(TK_EOF, p, p);
     return head.next;
 }
 
@@ -148,178 +143,272 @@ tokenize()
 // Parser
 //
 
-// 抽象構文木のノードの種類
 typedef enum {
     ND_ADD, // +
     ND_SUB, // -
     ND_MUL, // *
     ND_DIV, // /
-    ND_NUM, // 整数
+    ND_NEG, // unary -
+    ND_EQ,  // ==
+    ND_NE,  // !=
+    ND_LT,  // <
+    ND_LE,  // <=
+    ND_NUM, // Integer
 } NodeKind;
 
+// AST node type
 typedef struct Node Node;
-
-// 抽象構文木のノードの型
 struct Node {
-    NodeKind kind;  // ノードの型
-    Node *lhs;      // 左辺
-    Node *rhs;      // 右辺
-    int val;        // kindがND_NUMの場合のみ使う
+    NodeKind kind;  // Node kind
+    Node *lhs;      // Left-hand side
+    Node *rhs;      // Right-hand side
+    int val;        // Used if kind == ND_NUM
 };
 
-Node *expr();
-Node *mul();
-Node *primary();
-Node *unary();
-
-// 新しいノードを作成するための関数
-// kindがND_NUM以外の場合に使う
-Node *
-new_node(NodeKind kind)
-{
+static Node *new_node(NodeKind kind) {
     Node *node = calloc(1, sizeof(Node));
     node->kind = kind;
     return node;
 }
 
-Node *
-new_binary(NodeKind kind, Node *lhs, Node *rhs)
-{
+static Node *new_binary(NodeKind kind, Node *lhs, Node *rhs) {
     Node *node = new_node(kind);
     node->lhs = lhs;
     node->rhs = rhs;
     return node;
 }
 
-// 新しいノードを作成するための関数
-// kindがND_NUMの場合に使う
-Node *
-new_num(int val)
-{
+static Node *new_unary(NodeKind kind, Node *expr) {
+    Node *node = new_node(kind);
+    node->lhs = expr;
+    return node;
+}
+
+static Node *new_num(int val) {
     Node *node = new_node(ND_NUM);
     node->val = val;
     return node;
 }
 
-// expr = mul ("+" mul | "-" mul)*
-Node *
-expr()
-{
-    Node *node = mul();
+static Node *expr(Token **rest, Token *tok);
+static Node *equality(Token **rest, Token *tok);
+static Node *relational(Token **rest, Token *tok);
+static Node *add(Token **rest, Token *tok);
+static Node *mul(Token **rest, Token *tok);
+static Node *unary(Token **rest, Token *tok);
+static Node *primary(Token **rest, Token *tok);
+
+// expr = equality
+static Node *expr(Token **rest, Token *tok) {
+    return equality(rest, tok);
+}
+
+// equality = relational ("==" relational | "!=" relational)*
+static Node *equality(Token **rest, Token *tok) {
+    Node *node = relational(&tok, tok);
 
     for (;;) {
-        if (consume('+'))
-            node = new_binary(ND_ADD, node, mul());
-        else if (consume('-'))
-            node = new_binary(ND_SUB, node, mul());
-        else
-            return node;
+        if (equal(tok, "==")) {
+            node = new_binary(ND_EQ, node, relational(&tok, tok->next));
+            continue;
+        }
+
+        if (equal(tok, "!=")) {
+            node = new_binary(ND_NE, node, relational(&tok, tok->next));
+            continue;
+        }
+
+        *rest = tok;
+        return node;
     }
 }
 
-// mul = unary ("*" unary | "/" unary)*
-Node *
-mul()
-{
-    Node *node = unary();
+// relational = add ("<" add | "<=" add | ">" add | ">=" add)*
+static Node *relational(Token **rest, Token *tok) {
+    Node *node = add(&tok, tok);
 
     for (;;) {
-        if (consume('*'))
-            node = new_binary(ND_MUL, node, unary());
-        else if (consume('/'))
-            node = new_binary(ND_DIV, node, unary());
-        else
-            return node;
+        if (equal(tok, "<")) {
+            node = new_binary(ND_LT, node, add(&tok, tok->next));
+            continue;
+        }
+
+        if (equal(tok, "<=")) {
+            node = new_binary(ND_LE, node, add(&tok, tok->next));
+            continue;
+        }
+
+        if (equal(tok, ">")) {
+            node = new_binary(ND_LT, add(&tok, tok->next), node);
+            continue;
+        }
+
+        if (equal(tok, ">=")) {
+            node = new_binary(ND_LE, add(&tok, tok->next), node);
+            continue;
+        }
+
+        *rest = tok;
+        return node;
     }
 }
 
-// unary = ("+ | "-")? unary
+// add = mul ("+" mul | "-" mul)*
+static Node *add(Token **rest, Token *tok) {
+    Node *node = mul(&tok, tok);
+
+    for (;;) {
+        if (equal(tok, "+")) {
+            node = new_binary(ND_ADD, node, mul(&tok, tok->next));
+            continue;
+        }
+
+        if (equal(tok, "-")) {
+            node = new_binary(ND_SUB, node, mul(&tok, tok->next));
+            continue;
+        }
+
+        *rest = tok;
+        return node;
+    }
+}
+
+// mul = unary("*" unary | "/" unary)*
+static Node *mul(Token **rest, Token *tok) {
+    Node *node = unary(&tok, tok);
+
+    for (;;) {
+        if (equal(tok, "*")) {
+            node = new_binary(ND_MUL, node, unary(&tok, tok->next));
+            continue;
+        }
+
+        if (equal(tok, "/")) {
+            node = new_binary(ND_DIV, node, unary(&tok, tok->next));
+            continue;
+        }
+
+        *rest = tok;
+        return node;
+    }
+}
+
+// unary = ("+" | "-") unary
 //       | primary
-Node *
-unary()
-{
-    if (consume('+'))
-        return unary();
-    if (consume('-'))
-        return new_binary(ND_SUB, new_num(0), unary());
-    return primary();
+static Node *unary(Token **rest, Token *tok) {
+    if (equal(tok, "+"))
+        return unary(rest, tok->next);
+    
+    if (equal(tok, "-"))
+        return new_unary(ND_NEG, unary(rest, tok->next));
+        
+    return primary(rest, tok);
 }
 
 // primary = "(" expr ")" | num
-Node *
-primary()
-{
-    // 次のトークンが "(" なら、 "(" expr ")" のはず
-    if (consume('(')) {
-        Node *node = expr();
-        expect(')');
+static Node *primary(Token **rest, Token *tok) {
+    if (equal(tok, "(")) {
+        Node *node = expr(&tok, tok->next);
+        *rest = skip(tok, ")");
         return node;
     }
 
-    // そうでなければ数値のはず
-    return new_num(expect_number());
+    if (tok->kind == TK_NUM) {
+        Node *node = new_num(tok->val);
+        *rest = tok->next;
+        return node;
+    }
+
+    error_tok(tok, "expected an expression");
 }
 
 //
 // Code generator
 //
 
-void
-gen(Node *node)
-{
-    if (node->kind == ND_NUM) {
-        printf("    push %d\n", node->val);
+static int depth;
+
+static void push(void) {
+    printf("    push %%rax\n");
+    depth++;
+}
+
+static void pop(char *arg) {
+    printf("    pop %s\n", arg);
+    depth--;
+}
+
+static void gen_expr(Node *node) {
+    switch (node->kind) {
+    case ND_NUM:
+        printf("    mov $%d, %%rax\n", node->val);
+        return;
+    case ND_NEG:
+        gen_expr(node->lhs);
+        printf("    neg %%rax\n");
         return;
     }
 
-    gen(node->lhs);
-    gen(node->rhs);
-
-    printf("    pop rdi\n");
-    printf("    pop rax\n");
+    gen_expr(node->rhs);
+    push();
+    gen_expr(node->lhs);
+    pop("%rdi");
 
     switch (node->kind) {
     case ND_ADD:
-        printf("    add rax, rdi\n");
-        break;
+        printf("    add %%rdi, %%rax\n");
+        return;
     case ND_SUB:
-        printf("    sub rax, rdi\n");
-        break;
+        printf("    sub %%rdi, %%rax\n");
+        return;
     case ND_MUL:
-        printf("    imul rax, rdi\n");
-        break;
+        printf("    imul %%rdi, %%rax\n");
+        return;
     case ND_DIV:
         printf("    cqo\n");
-        printf("    idiv rdi\n");
-        break;
+        printf("    idiv %%rdi\n");
+        return;
+    case ND_EQ:
+    case ND_NE:
+    case ND_LT:
+    case ND_LE:
+        printf("    cmp %%rdi, %%rax\n");
+
+        if (node->kind == ND_EQ)
+            printf("    sete %%al\n");
+        else if (node->kind == ND_NE)
+            printf("    setne %%al\n");
+        else if (node->kind == ND_LT)
+            printf("    setl %%al\n");
+        else if (node->kind == ND_LE)
+            printf("    setle %%al\n");
+        
+        printf("    movzb %%al, %%rax\n");
+        return;
     }
 
-    printf("    push rax\n");
+    error("invalid expression");
 }
 
-int
-main(int argc, char *argv[])
-{
+int main(int argc, char *argv[]) {
     if (argc != 2)
         error("%s: invalid number of arguments", argv[0]);
 
-    // トークナイズしてパースする
-    user_input = argv[1];
-    token = tokenize(user_input);
-    Node *node = expr();
+        // Tokenize and parse.
+        current_input = argv[1];
+        Token *tok = tokenize();
+        Node *node = expr(&tok, tok);
 
-    // アセンブリの前半部分を出力
-    printf(".intel_syntax noprefix\n");
-    printf(".globl main\n");
-    printf("main:\n");
+        if (tok->kind != TK_EOF)
+            error_tok(tok, "extra token");
+        
+        printf(".globl main\n");
+        printf("main:\n");
 
-    // 抽象構文木を下りながらコード生成
-    gen(node);
+        // Traverse the AST to emit assembly.
+        gen_expr(node);
+        printf("    ret\n");
 
-    // スタックトップに式全体の値が残っているはずなので
-    // それをRAXにロードして関数からの返り値とする
-    printf("    pop rax\n");
-    printf("    ret\n");
-
-    return 0;
+        assert(depth == 0);
+        return 0;
 }
